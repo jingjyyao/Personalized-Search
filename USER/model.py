@@ -3,7 +3,6 @@
     date: 20210203
     the USER model, including 4 components: text encoder, session encoder, history encoder, unified task framework
 """
-
 import torch
 import pickle
 import numpy as np
@@ -45,6 +44,7 @@ def get_attn_key_pad_mask(seq_k, seq_q):
     padding_mask = seq_k.eq(0)
     padding_mask = padding_mask.unsqueeze(1).expand(-1, len_q, -1)  # b x lq x lk
 
+    return padding_mask
 
 class Encoder(nn.Module):
     """ 
@@ -229,8 +229,6 @@ class VanillaAtttention(nn.Module):
         weights = torch.softmax(weights, dim=-1) # [B, seq_len]
         return torch.bmm(weights.unsqueeze(1), v).squeeze(1), weights # [B, 1, seq_len], [B, seq_len, dim]
 
-
-
 class Contextual(nn.Module):
     def __init__(self, max_s_len, max_sess_len, max_sess_num, max_query_num, embed_dim, batch_size, embed_path, vocab_path, user_path, 
         source_path, source_embed_path, d_model=100, d_inner=2048, n_layers=1, n_head=8, d_k=64, d_v=64, dropout=0.1):
@@ -330,7 +328,7 @@ class Contextual(nn.Module):
 
     def generate_sess_pos(self, long_pos):
         batch_size = long_pos.shape[0]
-        long_sess_pos = torch.zeros((batch_size, self.max_sess_num, self.max_sess_len), dtype=torch.long)
+        long_sess_pos = torch.zeros((batch_size, self.max_sess_num, self.max_sess_len), dtype=torch.long).cuda()
         for i in range(batch_size):
             for j in range(self.max_sess_num):
                 for k in range(self.max_sess_len):
@@ -414,7 +412,8 @@ class Contextual(nn.Module):
         long_encode_1 = torch.reshape(long_encode_1, (-1, self.max_sess_len, self.embed_dim)) # [batchsize*sess_num, max_sess_len, embed_dim]
         long_types_embed = self.type_embedding(long_types)
         long_types_embed = long_types_embed.view(-1, self.max_sess_len, self.embed_dim)
-        long_sess_pos = self.generate_sess_pos(long_pos) # [batch, sess_num, sess_len]
+        long_sess_pos = self.generate_sess_pos(long_pos.view(-1, self.max_sess_num, self.max_sess_len)) # [batch, sess_num, sess_len]
+        long_sess_pos = long_sess_pos.view(-1, self.max_sess_len)
         long_encode_2, *_ = self.encoder_session(long_encode_1, long_sess_pos, needpos=False) # [batchsize, sess_num*sess_len, embed_dim]
         long_encode_2 = long_encode_2.view(-1, self.max_sess_num*self.max_sess_len, self.embed_dim)
         # long_encode_2, *_ = self.encoder_session(long_encode_1, long_pos, needpos=False) # [batchsize, sess_num*sess_len, embed_dim]
@@ -427,7 +426,6 @@ class Contextual(nn.Module):
         long_encode_3, query_long_encode_3 = torch.split(long_encode_3, [self.max_sess_num*self.max_sess_len, 1], 1) # [batchsize, 1, embed_dim]
 
 
-
         long_encode_2 = long_encode_2.repeat(cand_num, 1, 1) # [batchsize*(npratio+1), sess_num*sesslen, embed_dim]
         long_plus_pos = long_plus_pos.repeat(cand_num, 1)
         long_plus_doc = torch.cat([long_encode_2, doc_encode_1_sum.unsqueeze(1)], 1)
@@ -436,7 +434,6 @@ class Contextual(nn.Module):
         
         doc_encode_1_sum = doc_encode_1_sum.view(-1, cand_num, self.embed_dim)  # [batchsize, npratio+1, embed_dim]
         doc_long_encode_3 = doc_long_encode_3.view(-1, cand_num, self.embed_dim)
-
 
 
         # compute matching scores between short/long-term intent and document
